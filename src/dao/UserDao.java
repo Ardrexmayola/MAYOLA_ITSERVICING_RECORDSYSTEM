@@ -1,27 +1,13 @@
 package dao;
 
-import model.User;
 import database.DBConnection;
-import java.sql.*;
-import java.util.ArrayList;
-import java.util.List;
+import model.User;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 
 public class UserDao {
-
-    public boolean registerUser(String fullName, String username, String password, String role) {
-        String sql = "INSERT INTO Users (FullName, Username, Password, Role, Status) VALUES (?, ?, ?, ?, 'PENDING')";
-        try (Connection conn = DBConnection.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, fullName);
-            pstmt.setString(2, username);
-            pstmt.setString(3, password);
-            pstmt.setString(4, role);
-            return pstmt.executeUpdate() > 0;
-        } catch (SQLException e) {
-            System.err.println("Registration error: " + e.getMessage());
-            return false;
-        }
-    }
+    private final ActivityLogDao activityLogDao = new ActivityLogDao();
 
     public User authenticate(String username, String password) {
         String sql = "SELECT * FROM Users WHERE Username = ? AND Password = ?";
@@ -31,73 +17,101 @@ public class UserDao {
             pstmt.setString(2, password);
             ResultSet rs = pstmt.executeQuery();
             if (rs.next()) {
-                User user = new User();
-                user.setUserId(rs.getInt("UserID"));
-                user.setFullName(rs.getString("FullName"));
-                user.setUsername(rs.getString("Username"));
-                user.setPassword(rs.getString("Password"));
-                user.setRole(rs.getString("Role"));
-                user.setStatus(rs.getString("Status"));
-                return user;
+                return new User(
+                    rs.getInt("UserID"),
+                    rs.getString("FullName"),
+                    rs.getString("Username"),
+                    rs.getString("Password"),
+                    rs.getString("Role"),
+                    rs.getString("Status")
+                );
             }
-        } catch (SQLException e) {
-            System.err.println("Login error: " + e.getMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
         }
         return null;
     }
 
-    public List<User> getAllUsers() {
-        List<User> users = new ArrayList<>();
-        String sql = "SELECT * FROM Users";
+    public boolean registerUser(String fullName, String username, String password, String role) {
+        String sql = "INSERT INTO Users (FullName, Username, Password, Role, Status) VALUES (?, ?, ?, ?, 'PENDING')";
         try (Connection conn = DBConnection.getConnection();
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-            while (rs.next()) {
-                User user = new User();
-                user.setUserId(rs.getInt("UserID"));
-                user.setFullName(rs.getString("FullName"));
-                user.setUsername(rs.getString("Username"));
-                user.setPassword(rs.getString("Password"));
-                user.setRole(rs.getString("Role"));
-                user.setStatus(rs.getString("Status"));
-                users.add(user);
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, fullName);
+            pstmt.setString(2, username);
+            pstmt.setString(3, password);
+            pstmt.setString(4, role);
+
+            boolean success = pstmt.executeUpdate() > 0;
+            if (success) {
+                activityLogDao.logAction(
+                    0,
+                    "USER_REGISTERED",
+                    "Registered new IT servicing account for: " + username + " with role " + role
+                );
             }
-        } catch (SQLException e) {
-            System.err.println("Error fetching users: " + e.getMessage());
+            return success;
+        } catch (Exception e) {
+            return false;
         }
-        return users;
     }
 
-    public List<User> getPendingUsers() {
-        List<User> users = new ArrayList<>();
-        String sql = "SELECT * FROM Users WHERE Status = 'PENDING'";
+    public boolean updateUserRoleAndStatus(int adminUserId, int targetUserId, String newRole, String newStatus) {
+        String sql = "UPDATE Users SET Role = ?, Status = ? WHERE UserID = ?";
         try (Connection conn = DBConnection.getConnection();
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-            while (rs.next()) {
-                User user = new User();
-                user.setUserId(rs.getInt("UserID"));
-                user.setFullName(rs.getString("FullName"));
-                user.setUsername(rs.getString("Username"));
-                user.setPassword(rs.getString("Password"));
-                user.setRole(rs.getString("Role"));
-                user.setStatus(rs.getString("Status"));
-                users.add(user);
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, newRole);
+            pstmt.setString(2, newStatus);
+            pstmt.setInt(3, targetUserId);
+
+            int rows = pstmt.executeUpdate();
+            if (rows > 0) {
+                activityLogDao.logAction(
+                    adminUserId,
+                    "USER_UPDATED",
+                    "Admin ID " + adminUserId + " updated User ID " + targetUserId + " role to " + newRole + " and status to " + newStatus
+                );
+                return true;
             }
-        } catch (SQLException e) {
-            System.err.println("Error fetching pending users: " + e.getMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
         }
-        return users;
+        return false;
     }
 
-    public boolean approveUser(int userId) {
-        String sql = "UPDATE Users SET Status = 'APPROVED' WHERE UserID = ?";
+    public boolean updateUserRoleAndStatus(int targetUserId, String newRole, String newStatus) {
+        return updateUserRoleAndStatus(1, targetUserId, newRole, newStatus);
+    }
+
+    public void displayAllUsers() {
+        String sql = "SELECT UserID, FullName, Username, Role, Status FROM Users";
+        try (Connection conn = DBConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql);
+             ResultSet rs = pstmt.executeQuery()) {
+
+            System.out.println("\n--- USER LIST ---");
+            System.out.println("ID   | Full Name          | Username     | Role         | Status");
+            System.out.println("---------------------------------------------------------------");
+            while (rs.next()) {
+                System.out.printf("%-4d | %-18s | %-12s | %-12s | %s\n",
+                        rs.getInt("UserID"),
+                        rs.getString("FullName"),
+                        rs.getString("Username"),
+                        rs.getString("Role"),
+                        rs.getString("Status"));
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public boolean userExists(int userId) {
+        String sql = "SELECT 1 FROM Users WHERE UserID = ?";
         try (Connection conn = DBConnection.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, userId);
-            return pstmt.executeUpdate() > 0;
-        } catch (SQLException e) {
-            System.err.println("Approval error: " + e.getMessage());
+            ResultSet rs = pstmt.executeQuery();
+            return rs.next();
+        } catch (Exception e) {
             return false;
         }
     }
